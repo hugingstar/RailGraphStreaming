@@ -20,13 +20,15 @@
 
 | | |
 |---|---|
-| 노선망 | 실좌표 98개 역, 12개 노선 (경부·호남고속선, 수서고속선, 경부·호남·전라·경전·중앙·강릉·장항·경춘선, 동해선) |
-| 열차 | 19개 운행패턴 × 상·하행 = **하루 728편성**, 상시 **110~130편성 운행 중** |
-| 주행시간 | 실제 공표 소요시간 대비 **±15% 이내** (테스트로 고정) |
-| 정시율 | KTX 5분 이내 **97.9%**, 무궁화 **93.1%** — 실제 통계와 일치 |
-| 추정 정확도 | 관측 반영 시 위치 MAE **0.8km** (시간표만 쓰면 1.3km) |
+| 노선망 | 실좌표 98개 역, 12개 노선¹ |
+| 열차 | 19개 운행패턴 × 상·하행 = **하루 728편성**, 상시 **110~130편성 운행** |
+| 주행시간 | 공표 소요시간 대비 **±15% 이내**(테스트로 고정) |
+| 정시율 | KTX 5분 이내 **97.9%**, 무궁화 **93.1%**(실제 통계와 일치) |
+| 추정 정확도 | 위치 MAE **0.8km**(관측 반영, 시간표만 쓰면 1.3km) |
 | 신뢰구간 | 90% 밴드의 실제 커버리지 **85~91%** |
-| 처리량 | 약 **120 msg/s** (편성당 1Hz), 틱당 계산 **~60ms** |
+| 처리량 | 약 **120 msg/s**(편성당 1Hz), 틱당 계산 **~60ms** |
+
+> ¹ 경부·호남고속선, 수서고속선, 경부·호남·전라·경전·중앙·강릉·장항·경춘선, 동해선
 
 ---
 
@@ -323,21 +325,28 @@ cd backend && .venv/Scripts/python -m pytest
 
 전부 환경변수다.
 
-| 변수 | 기본값 | 뜻 |
+| 변수 | 기본값(예시) | 뜻 |
 |---|---|---|
-| `KAFKA_BOOTSTRAP` | `localhost:19092` | 브로커 |
+| `KAFKA_BOOTSTRAP` | `localhost:19092` | 브로커 주소 |
 | `RAILGRAPH_API_PORT` | `8123` | API 포트 |
 | `RAILGRAPH_TICK_S` | `1.0` | 추정 발행 주기(초) |
-| `RAILGRAPH_OBS_EVERY_N_STOPS` | `3` | 몇 정차역마다 관측을 흘릴지 — 키우면 불확실성이 눈에 띄게 커진다 |
-| `RAILGRAPH_ALERT_DELAY_S` | `300` | 지연 경보 임계 |
-| `RAILGRAPH_DENSITY` | `1.0` | 배차 간격 배수 — `0.5`면 열차 수가 두 배 |
-| `RAILGRAPH_SPEED` | `1.0` | 시뮬레이션 배속. 실시간 지도는 1.0이 맞다 |
-| `DATABASE_URL` | `postgresql://railgraph:railgraph@localhost:15432/railgraph` | 계정·GraphRAG 데이터 |
-| `RAILGRAPH_SAMPLE_INTERVAL_S` | `60` | `persist`가 열차당 지연 스냅샷을 저장하는 간격 |
-| `RAILGRAPH_GRAPHBUILD_INTERVAL_S` | `30` | `graphbuild`가 Trip/Alert 노드를 동기화하는 주기 |
-| `RAILGRAPH_EMBED_BATCH` | `20` | 한 주기에 임베딩할 노드 수 (무료 Gemini 쿼터 보호용) |
-| `GEMINI_API_KEY` | — | `.env`에 설정. 없으면 그래프는 만들어지지만 임베딩/RAG 질의는 건너뛴다 |
-| `GEMINI_MODEL` | `gemini-flash-lite-latest` | GraphRAG 답변 생성에 쓰는 모델 |
+| `RAILGRAPH_OBS_EVERY_N_STOPS` | `3` | 관측 간격(정차역 수)¹ |
+| `RAILGRAPH_ALERT_DELAY_S` | `300` | 지연 경보 임계(초) |
+| `RAILGRAPH_DENSITY` | `1.0` | 배차 간격 배수² |
+| `RAILGRAPH_SPEED` | `1.0` | 시뮬레이션 배속³ |
+| `DATABASE_URL` | `postgresql://<user>:<password>@<host>:<port>/<db>` | 계정·GraphRAG DB |
+| `RAILGRAPH_SAMPLE_INTERVAL_S` | `60` | 지연 스냅샷 저장 간격(초) |
+| `RAILGRAPH_GRAPHBUILD_INTERVAL_S` | `30` | 그래프 동기화 주기(초) |
+| `RAILGRAPH_EMBED_BATCH` | `20` | 1주기당 임베딩 노드 수⁴ |
+| `GEMINI_API_KEY` | *(없음)* | Gemini API 키⁵ |
+| `GEMINI_MODEL` | `gemini-flash-lite-latest` | 답변 생성 모델 |
+
+> ¹ 키우면 불확실성이 눈에 띄게 커진다 · ² `0.5`면 열차 수 2배 · ³ 실시간 지도는 `1.0` 유지 ·
+> ⁴ 무료 Gemini 쿼터 보호용 · ⁵ `.env`에 `GEMINI_API_KEY=실제_키_값` 형태로 설정 (`.env.example` 참고).
+> 없으면 그래프는 만들어지되 임베딩·GraphRAG 질의는 건너뛴다.
+>
+> `DATABASE_URL`·`GEMINI_API_KEY` 모두 여기 적힌 건 형식일 뿐 실제 값이 아니다 — 로컬 개발용
+> 실값은 `docker-compose.yml`/`.env`에 있고 둘 다 git에 커밋되지 않는다.
 
 ---
 
