@@ -73,19 +73,23 @@ async def _station_trips(conn: asyncpg.Connection, station_id: str, station_key:
                          day_start: float | None, day_end: float | None,
                          limit: int = 15) -> list[dict]:
     """Graph traversal (not vector search): every Trip whose route touches
-    this station, optionally windowed to one KST calendar day, newest
-    scheduled stop-time first."""
+    this station, optionally windowed to one KST calendar day, trains still
+    ahead of *now* first (soonest first), already-departed ones after --
+    so "다음 열차가 뭐야" reads naturally instead of starting at 05:00."""
     clauses = ["e.dst_id = $1", "e.relation IN ('DEPARTS_FROM', 'STOPS_AT', 'ARRIVES_AT')"]
     params: list = [station_id]
     if day_start is not None:
         clauses.append("(e.properties->>'departure_ts')::float BETWEEN $2 AND $3")
         params.extend([day_start, day_end])
+    params.append(config.now())
+    now_param = f"${len(params)}"
     rows = await conn.fetch(
         f"""
         SELECT n.type, n.key, n.label, n.summary, e.properties AS stop
         FROM graph_edges e JOIN graph_nodes n ON n.id = e.src_id
         WHERE {" AND ".join(clauses)}
-        ORDER BY (e.properties->>'departure_ts')::float
+        ORDER BY (e.properties->>'departure_ts')::float < {now_param},
+                 (e.properties->>'departure_ts')::float
         LIMIT {limit}
         """,
         *params,
@@ -184,16 +188,22 @@ async def answer(pool: asyncpg.Pool, question: str, generate: bool = True,
     if not generate:
         return result
     context = _format_context(nodes)
+    now_str = datetime.now(config.KST).strftime("%H:%M")
     prompt = (
         "너는 철도 운행 그래프에서 검색한 사실을 바탕으로 답하는 역무원 챗봇 '비둘기 역장님'이다. "
         "다음 지침을 지켜라.\n"
         "1. [사실]에 있는 내용만 근거로 답하고, 근거가 부족하면 모른다고 답하라.\n"
-        "2. [사실]의 열차가 8건을 넘으면 전부 나열하지 말고, 대표로 3~4건만 짚어준 뒤 "
+        f"2. 지금 시각은 {now_str}이다. [사실]은 이미 지금 시각을 기준으로 아직 남은(다가오는) 열차부터 "
+        "정렬되어 있으니, 그 순서를 따라 가장 가까운 시간에 출발/경유하는 열차부터 먼저 언급하라.\n"
+        "3. [사실]의 열차가 8건을 넘으면 전부 나열하지 말고, 가장 가까운 시간 순으로 3~4건만 짚어준 뒤 "
         "상행/하행, 출발 시간대처럼 사용자가 좁혀서 다시 물어볼 수 있는 구체적인 질문을 "
         "한국어로 짧게 덧붙여라.\n"
-        "3. 목록을 그대로 나열하지 말고, 자연스러운 문장 2~4개로 정리하되 열차명과 시각은 "
+        "4. 목록을 그대로 나열하지 말고, 자연스러운 문장 2~4개로 정리하되 열차명과 시각은 "
         "반드시 포함하라.\n"
-        "4. [이전 대화]가 있으면 그 맥락을 이어서 답하라 (예: '상행이요' 같은 짧은 후속 질문).\n\n"
+        "5. 첫 줄은 반드시 '구구~ 비둘기 역장입니다! ' 뒤에 어울리는 이모티콘 하나를 붙이고, "
+        "그다음 빈 줄을 하나 띄운 뒤 본문을 이어서 써라. 본문 중간에도 상황에 맞는 이모티콘을 "
+        "1~2개 자연스럽게 섞어라 (예: 🚄 🚉 ⏰ 🕊️). 이모티콘을 과하게 남발하지는 마라.\n"
+        "6. [이전 대화]가 있으면 그 맥락을 이어서 답하라 (예: '상행이요' 같은 짧은 후속 질문).\n\n"
         f"[이전 대화]\n{_history_text(history)}\n\n[사실]\n{context}\n\n[질문]\n{question}"
     )
     try:

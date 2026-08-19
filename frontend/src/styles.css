@@ -571,6 +571,7 @@ ul, ol { list-style: none; }
   background: var(--panel-2); color: var(--ink);
   font-size: 12.5px; line-height: 1.5; padding: 8px 11px; border-radius: 3px 12px 12px 12px;
 }
+.rag-msg-a p { white-space: pre-wrap; }
 .rag-loading, .rag-error { display: inline-block; }
 .rag-loading { color: var(--ink-3); }
 .rag-error { color: var(--major); }
