@@ -8,6 +8,7 @@ import MapView from './components/MapView'
 import Sidebar, { type Filters } from './components/Sidebar'
 import DetailPanel from './components/DetailPanel'
 import AccountMenu from './components/AccountMenu'
+import RagChat from './components/RagChat'
 
 const EMPTY_FILTERS: Filters = {
   types: new Set(), line: '', direction: '', delayedOnly: false, query: '',
@@ -155,6 +156,7 @@ export default function App() {
         />
         <Legend network={network} />
         <AccountMenu />
+        <RagChat />
         {conn !== 'live' && (
           <div className="banner">
             {conn === 'connecting' ? '스트림에 연결하는 중…' : '스트림이 끊겼습니다. 재연결 중…'}

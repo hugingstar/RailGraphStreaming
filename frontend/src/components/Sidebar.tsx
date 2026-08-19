@@ -58,13 +58,13 @@ export default function Sidebar(p: Props) {
     <aside className="sidebar">
       <header className="brand">
         <div className="brand-row">
-          <h1><Link to="/">RailGraph</Link></h1>
+          <h1><Link to="/">🕊️ 비둘기 역장님</Link></h1>
           <span className={`conn conn-${conn}`}>
             <i /> {CONN_LABEL[conn]}
           </span>
         </div>
         <p className="tagline">
-          시간표와 희소한 관측만으로 추정한 전국 열차의 <strong>현재 위치 확률</strong>
+          전국 열차가 지금 <strong>어디쯤 있는지</strong> 알려드려요
         </p>
         <div className="clock">
           <span className="clock-time">{stats ? hhmmss(stats.sim_ts) : '--:--:--'}</span>
@@ -101,6 +101,18 @@ export default function Sidebar(p: Props) {
       </div>
 
       <div className="filters">
+        <div className="chips-head">
+          <span className="chips-title">차종</span>
+          <div className="chips-actions">
+            <button type="button" className="chips-toggle" onClick={() => p.onFilters({ ...filters, types: new Set() })}>
+              전체 선택
+            </button>
+            <em />
+            <button type="button" className="chips-toggle" onClick={() => p.onFilters({ ...filters, types: new Set(['__none__']) })}>
+              전체 해제
+            </button>
+          </div>
+        </div>
         <div className="chips">
           {allTypes.map((t) => (
             <button

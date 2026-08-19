@@ -45,7 +45,7 @@ export default function Signup() {
   return (
     <div className="auth-page">
       <form className="auth-card" onSubmit={submit}>
-        <h1 className="auth-title">RailGraph</h1>
+        <h1 className="auth-title">🕊️ 비둘기 역장님</h1>
         <p className="auth-sub">새 계정을 만듭니다</p>
 
         <label className="auth-field">

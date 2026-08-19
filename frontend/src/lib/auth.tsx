@@ -54,7 +54,7 @@ function extractDetail(body: unknown): string | null {
   return null
 }
 
-async function call<T>(path: string, init?: RequestInit): Promise<T> {
+export async function call<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response
   try {
     res = await fetch(path, {

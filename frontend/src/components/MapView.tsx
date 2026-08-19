@@ -39,15 +39,15 @@ const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: 
 const STYLE: StyleSpecification = {
   version: 8,
   sources: {},
-  layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#060a12' } }],
+  layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#ffffff' } }],
 }
 
-const BASEMAP_SRC = 'carto-dark'
+const BASEMAP_SRC = 'carto-light'
 
 // The label-free variant on purpose: CARTO bakes its text into the tile image,
 // always in the local language and at a fixed size, so neither the language
 // switch nor the larger type could reach it.  We draw every name ourselves.
-const BASEMAP_VARIANT = 'dark_nolabels'
+const BASEMAP_VARIANT = 'light_nolabels'
 
 /** Great-circle initial bearing from p1 to p2, in degrees clockwise from north. */
 function bearing(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -125,7 +125,7 @@ export default function MapView(props: Props) {
         id: 'rail-casing', type: 'line', source: 'rail',
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: {
-          'line-color': '#0a1220',
+          'line-color': '#cec5b2',
           'line-width': ['interpolate', ['linear'], ['zoom'], 5, 7, 10, 17],
         },
       })
@@ -147,8 +147,8 @@ export default function MapView(props: Props) {
         id: 'focus-line', type: 'line', source: 'focus',
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: {
-          'line-color': '#e2e8f0',
-          'line-opacity': 0.65,
+          'line-color': '#2b2620',
+          'line-opacity': 0.55,
           'line-width': ['interpolate', ['linear'], ['zoom'], 5, 2.6, 10, 5.4],
         },
       })
@@ -161,10 +161,10 @@ export default function MapView(props: Props) {
             5, ['case', ['>', ['get', 'weight'], 150], 2.6, 1.3],
             10, ['case', ['>', ['get', 'weight'], 150], 6, 3.2],
           ],
-          'circle-color': '#7c8aa3',
-          'circle-opacity': 0.75,
-          'circle-stroke-width': 0.6,
-          'circle-stroke-color': '#0b1220',
+          'circle-color': '#6b7690',
+          'circle-opacity': 0.8,
+          'circle-stroke-width': 0.8,
+          'circle-stroke-color': '#ffffff',
         },
       })
 
@@ -172,10 +172,10 @@ export default function MapView(props: Props) {
         id: 'focus-stop', type: 'circle', source: 'focusStops',
         paint: {
           'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 2.6, 10, 5.5],
-          'circle-color': '#f8fafc',
-          'circle-opacity': 0.9,
-          'circle-stroke-width': 1.2,
-          'circle-stroke-color': '#0b1220',
+          'circle-color': '#1f2937',
+          'circle-opacity': 0.92,
+          'circle-stroke-width': 1.4,
+          'circle-stroke-color': '#ffffff',
         },
       })
 
@@ -239,11 +239,11 @@ export default function MapView(props: Props) {
           'icon-ignore-placement': true,
         },
         paint: {
-          // White against a dark map, not the train's own colour: the arrow has
+          // Dark against a white map, not the train's own colour: the arrow has
           // to out-contrast the dot it sits beside, and the dot already carries
           // the type colour.
-          'icon-color': '#ffffff',
-          'icon-halo-color': '#04070d',
+          'icon-color': '#1f2937',
+          'icon-halo-color': '#ffffff',
           'icon-halo-width': 1.4,
           'icon-opacity': 0.98,
         },

@@ -29,8 +29,8 @@ export default function Login() {
   return (
     <div className="auth-page">
       <form className="auth-card" onSubmit={submit}>
-        <h1 className="auth-title">RailGraph</h1>
-        <p className="auth-sub">로그인하고 실시간 열차 위치 확률 지도를 확인하세요</p>
+        <h1 className="auth-title">🕊️ 비둘기 역장님</h1>
+        <p className="auth-sub">로그인하고 전국 열차가 지금 어디쯤 있는지 확인하세요</p>
 
         <label className="auth-field">
           <span>아이디</span>
