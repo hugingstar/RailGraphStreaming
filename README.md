@@ -110,8 +110,8 @@ flowchart LR
     subgraph WEB["웹 서비스"]
         API["api (FastAPI)<br/>REST + WebSocket"]
         AUTH["auth<br/>회원가입/로그인/세션"]
-        RAG["graphrag<br/>벡터검색 + 그래프순회 + Gemini"]
-        FE["React SPA<br/>지도 · 상세패널 · 계정"]
+        RAG["graphrag<br/>시간표 순회 + 벡터검색 + Gemini<br/>(비둘기 역장님)"]
+        FE["React SPA<br/>지도 · 상세패널 · 채팅(비둘기 역장님) · 계정"]
     end
 
     subgraph PERSIST["영속화 · GraphRAG 빌드"]
@@ -359,11 +359,12 @@ cd backend && .venv/Scripts/python -m pytest
 
 ---
 
-## GraphRAG
+## GraphRAG (비둘기 역장님)
 
 `persist`가 Kafka 스트림(`rail.plans`/`rail.positions`/`rail.alerts`)을 다운샘플링해
 Postgres(`train_trips`, `trip_delay_samples`, `trip_alerts`)에 쌓고, `graphbuild`가 그
-위에 지식 그래프(`graph_nodes`/`graph_edges`)를 세운다.
+위에 지식 그래프(`graph_nodes`/`graph_edges`)를 세운다. 
+이를 기반으로 웹에서 **"비둘기 역장님"** 이라는 페르소나의 챗봇이 사용자의 질문에 답한다.
 
 - 노드: `Station`(98개역), `Line`(12개노선), `TrainType`(8종), `Trip`(일별 운행),
   `Alert`(지연 경보) — 각 노드는 사람이 읽는 한국어 요약문(`summary`)을 갖는다.
@@ -373,12 +374,21 @@ Postgres(`train_trips`, `trip_delay_samples`, `trip_alerts`)에 쌓고, `graphbu
 질의는 `POST /api/graphrag/query` (로그인 필요):
 
 ```json
-{"query": "대전역은 어떤 노선이 지나가?", "generate": true}
+{
+  "query": "대전역은 어떤 노선이 지나가?", 
+  "generate": true, 
+  "history": [{"question": "...", "answer": "..."}]
+}
 ```
 
-벡터 유사도로 가장 가까운 노드를 찾고, 그 노드의 1-hop 이웃(그래프 순회)까지
-문맥으로 모아 Gemini로 답을 생성한다. `generate: false`면 검색된 사실만 반환한다
-(임베딩 쿼터가 없거나 생성이 실패해도 검색 결과는 그대로 온다).
+**검색과 생성의 분리**:
+1. **시간표 순회 (정확도 우선)**: "오늘/내일 ... 시간표/경유" 같은 시간표 관련 질문은 벡터 검색을 넘어
+   그래프를 순회해 역에 가장 빨리 도착하는 열차(곧 지나갈 열차)부터 정확하게 찾는다.
+2. **벡터 검색 (유연성)**: 다른 일반적인 질문은 벡터 유사도로 가장 가까운 노드를 찾는다.
+3. 찾은 노드의 1-hop 이웃(그래프 순회)까지 문맥으로 모아 Gemini로 "비둘기 역장님" 스타일의 답을 생성한다.
+   `generate: false`면 검색된 사실만 반환한다 (임베딩 쿼터가 없거나 생성이 실패해도 검색 결과는 그대로 온다).
+
+대화 맥락(`history`)을 기억하므로, "그럼 하행은?" 같은 연속된 질문도 자연스럽게 이어갈 수 있다.
 
 ---
 
@@ -403,7 +413,7 @@ backend/railgraph/
 ├── bus.py                # Kafka 프로듀서/컨슈머 헬퍼
 ├── auth.py               # 회원가입/로그인/세션/계정관리 (users, sessions)
 ├── embed.py               # Gemini 임베딩 · 텍스트 생성 클라이언트
-├── graphrag.py             # 벡터검색 + 1-hop 그래프순회 + 답변 생성
+├── graphrag.py             # 시간표 순회 + 벡터검색 + 1-hop 그래프순회 + 답변 생성 (비둘기 역장님)
 └── services/
     ├── dispatcher.py      # 시간표 발행 + 관측 시뮬레이션
     ├── estimator.py        # rail.plans+observations -> rail.positions/alerts
@@ -415,7 +425,7 @@ frontend/src/
 ├── main.tsx, App.tsx             # 라우팅(react-router-dom), AuthProvider
 ├── lib/auth.tsx                   # 인증 컨텍스트 + 표준화된 에러 처리
 ├── lib/feed.ts, types.ts, format.ts # WebSocket 피드, 타입, 포매팅
-├── components/                     # MapView, DetailPanel, Sidebar, AccountMenu, RequireAuth
+├── components/                     # MapView, DetailPanel, Sidebar, RagChat, AccountMenu 등
 └── pages/                           # Login, Signup, Account
 ```
 
