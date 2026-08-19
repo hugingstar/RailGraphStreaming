@@ -7,7 +7,7 @@ interface RagNode {
   key: string
   label: string
   summary: string
-  score: number
+  score: number | null
 }
 
 interface RagResponse {

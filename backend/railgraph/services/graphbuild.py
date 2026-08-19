@@ -1,14 +1,19 @@
 # -*- coding: utf-8 -*-
-"""Builds the GraphRAG layer: nodes/edges over the network plus persisted trips.
+"""Builds the GraphRAG layer: nodes/edges over the network plus the timetable.
 
-Two halves, both idempotent upserts so this can be re-run freely:
+Three parts, all idempotent upserts so this can be re-run freely:
 
 - Static topology (Station/Line/TrainType nodes, SERVES/ADJACENT_TO edges)
   comes straight from `network_data` and never changes at runtime -- built
   once at startup.
-- Dynamic facts (Trip/Alert nodes) come from the tables `persist.py` fills
-  from Kafka.  Polled on a timer using a `last_seen_at`/id watermark so a
-  quiet stretch doesn't mean re-scanning the whole table.
+- The schedule (Trip nodes, with a DEPARTS_FROM/STOPS_AT/ARRIVES_AT edge to
+  every commercial stop on its route) comes directly from `timetable.build_day`
+  for today and tomorrow, independent of when the dispatcher actually
+  publishes each trip to Kafka -- so the graph always has the whole day's
+  timetable, not just trains about to leave.
+- Alert nodes come from `trip_alerts`, the table `persist.py` fills from
+  Kafka.  Polled on a timer using an id watermark so a quiet stretch doesn't
+  mean re-scanning the whole table.
 
 Every node also gets a `summary`: a short natural-language sentence, since
 that's what an embedding step (next up) will actually vectorize -- the
@@ -20,13 +25,14 @@ import asyncio
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 
 import asyncpg
 
 from .. import config, embed
 from ..network import NETWORK
 from ..network_data import TRAIN_TYPES
+from ..timetable import TrainPlan, build_day
 
 log = logging.getLogger("graphbuild")
 
@@ -102,7 +108,7 @@ def orjson_dumps(obj: dict) -> str:
     return orjson.dumps(obj).decode()
 
 
-async def build_static(conn: asyncpg.Connection) -> None:
+async def build_static(conn: asyncpg.Connection) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
     station_ids: dict[str, str] = {}
     for name, (lat, lon) in NETWORK.stations.items():
         station_ids[name] = await _upsert_node(
@@ -110,24 +116,26 @@ async def build_static(conn: asyncpg.Connection) -> None:
             {"lat": lat, "lon": lon},
         )
 
+    type_ids: dict[str, str] = {}
     for tname, spec in TRAIN_TYPES.items():
-        await _upsert_node(
+        type_ids[tname] = await _upsert_node(
             conn, "TrainType", tname, tname,
             f"{tname}: 표정속도 최대 {spec['hsr_kmh']}km/h, 정시율 {spec['punctuality']*100:.0f}%",
             {"hsr_kmh": spec["hsr_kmh"], "conv_kmh": spec["conv_kmh"],
              "punctuality": spec["punctuality"]},
         )
 
+    line_ids: dict[str, str] = {}
     for line in NETWORK.lines:
         stations = line["stations"]
-        line_id = await _upsert_node(
+        line_ids[line["id"]] = await _upsert_node(
             conn, "Line", line["id"], line["name"],
             f"{line['name']}: {stations[0]}~{stations[-1]}, {len(stations)}개 역"
             f"{' (고속선)' if line['hsr'] else ''}",
             {"hsr": line["hsr"], "color": line["color"], "n_stations": len(stations)},
         )
         for i, name in enumerate(stations):
-            await _upsert_edge(conn, line_id, station_ids[name], "SERVES", {"seq": i})
+            await _upsert_edge(conn, line_ids[line["id"]], station_ids[name], "SERVES", {"seq": i})
         for a, b in zip(stations, stations[1:]):
             edge = NETWORK.edge(a, b)
             props = {"km": round(edge.km, 2), "hsr": edge.hsr, "line_id": edge.line_id}
@@ -135,6 +143,7 @@ async def build_static(conn: asyncpg.Connection) -> None:
             await _upsert_edge(conn, station_ids[b], station_ids[a], "ADJACENT_TO", props)
     log.info("static topology: %d stations, %d lines, %d train types",
              len(station_ids), len(NETWORK.lines), len(TRAIN_TYPES))
+    return station_ids, type_ids, line_ids
 
 
 async def _upsert_edge(conn: asyncpg.Connection, src: str, dst: str, relation: str,
@@ -146,48 +155,70 @@ def _hhmm(ts: float) -> str:
     return datetime.fromtimestamp(ts, config.KST).strftime("%H:%M")
 
 
+async def _upsert_trip(conn: asyncpg.Connection, plan: TrainPlan,
+                       station_ids: dict[str, str], type_ids: dict[str, str],
+                       line_ids: dict[str, str]) -> None:
+    """Upserts one Trip node plus a DEPARTS_FROM/STOPS_AT/ARRIVES_AT edge to
+    every commercial stop on its route -- not just origin/destination -- so
+    "which trains pass through X" can be answered by graph traversal instead
+    of hoping a vector search surfaces the right Trip node."""
+    stop_names = [plan.route.nodes[i] for i in plan.stop_idx]
+    dep, arr = _hhmm(plan.departure_ts), _hhmm(plan.arrival_ts)
+    via = stop_names[1:-1]
+    via_str = ", ".join(via[:8]) + (" 등" if len(via) > 8 else "")
+    summary = (f"{plan.name} ({plan.direction}) {plan.origin}→{plan.destination}, "
+               f"{dep} 출발 {arr} 도착"
+               + (f", 경유: {via_str}" if via_str else ""))
+    trip_id = await _upsert_node(
+        conn, "Trip", plan.train_id, plan.name, summary,
+        {"number": plan.number, "type": plan.type, "line_id": plan.line_id,
+         "origin": plan.origin, "destination": plan.destination,
+         "direction": plan.direction, "departure_ts": plan.departure_ts,
+         "arrival_ts": plan.arrival_ts},
+    )
+    type_id = type_ids.get(plan.type)
+    line_id = line_ids.get(plan.line_id)
+    if type_id:
+        await _upsert_edge(conn, trip_id, type_id, "OF_TYPE", {})
+    if line_id:
+        await _upsert_edge(conn, trip_id, line_id, "RUNS_ON", {})
+    last = len(plan.stop_idx) - 1
+    for seq, idx in enumerate(plan.stop_idx):
+        station_id = station_ids.get(plan.route.nodes[idx])
+        if not station_id:
+            continue
+        stop_arr_ts, stop_dep_ts, _km = plan.timeline[idx]
+        relation = "DEPARTS_FROM" if seq == 0 else "ARRIVES_AT" if seq == last else "STOPS_AT"
+        await _upsert_edge(conn, trip_id, station_id, relation,
+                           {"seq": seq, "arrival_ts": stop_arr_ts, "departure_ts": stop_dep_ts})
+
+
+async def build_schedule(conn: asyncpg.Connection, day: datetime,
+                         station_ids: dict[str, str], type_ids: dict[str, str],
+                         line_ids: dict[str, str]) -> None:
+    """Upserts every service scheduled to depart on the KST day containing
+    `day`, with full stop-by-stop edges -- independent of whether the
+    dispatcher has published that trip to Kafka yet, so the graph knows the
+    whole day's timetable, not just trains about to leave."""
+    plans = build_day(day)
+    for plan in plans:
+        await _upsert_trip(conn, plan, station_ids, type_ids, line_ids)
+    log.info("schedule %s: %d trips upserted", day.astimezone(config.KST).date(), len(plans))
+
+
 class DynamicSync:
-    """Watermarked poll of train_trips / trip_alerts into Trip / Alert nodes."""
+    """Watermarked poll of trip_alerts into Alert nodes.
+
+    Trip nodes themselves come from `build_schedule` (the full timetable,
+    computed directly), not from here -- this only attaches live delay
+    alerts to the Trip nodes that already exist.
+    """
 
     def __init__(self) -> None:
-        self.trips_since = datetime.fromtimestamp(0, timezone.utc)
         self.alerts_since = 0
 
     async def run_once(self, conn: asyncpg.Connection) -> None:
-        await self._sync_trips(conn)
         await self._sync_alerts(conn)
-
-    async def _sync_trips(self, conn: asyncpg.Connection) -> None:
-        rows = await conn.fetch(
-            "SELECT * FROM train_trips WHERE last_seen_at > $1 ORDER BY last_seen_at",
-            self.trips_since,
-        )
-        for r in rows:
-            dep, arr = _hhmm(r["departure_ts"]), _hhmm(r["arrival_ts"])
-            summary = (f"{r['name']} ({r['direction']}) {r['origin']}→{r['destination']}, "
-                       f"{dep} 출발 {arr} 도착")
-            trip_id = await _upsert_node(
-                conn, "Trip", r["train_id"], r["name"], summary,
-                {"number": r["number"], "type": r["type"], "line_id": r["line_id"],
-                 "origin": r["origin"], "destination": r["destination"],
-                 "direction": r["direction"], "departure_ts": r["departure_ts"],
-                 "arrival_ts": r["arrival_ts"]},
-            )
-            type_id = await _node_id(conn, "TrainType", r["type"])
-            line_id = await _node_id(conn, "Line", r["line_id"])
-            origin_id = await _node_id(conn, "Station", r["origin"])
-            dest_id = await _node_id(conn, "Station", r["destination"])
-            if type_id:
-                await _upsert_edge(conn, trip_id, type_id, "OF_TYPE", {})
-            if line_id:
-                await _upsert_edge(conn, trip_id, line_id, "RUNS_ON", {})
-            if origin_id:
-                await _upsert_edge(conn, trip_id, origin_id, "DEPARTS_FROM", {})
-            if dest_id:
-                await _upsert_edge(conn, trip_id, dest_id, "ARRIVES_AT", {})
-            self.trips_since = max(self.trips_since, r["last_seen_at"])
-        if rows:
-            log.info("synced %d trip nodes", len(rows))
 
     async def _sync_alerts(self, conn: asyncpg.Connection) -> None:
         rows = await conn.fetch(
@@ -238,10 +269,25 @@ async def embed_pending(conn: asyncpg.Connection, max_batches: int = 1) -> None:
             return
 
 
+async def _sync_schedule(conn: asyncpg.Connection, built_days: set[str],
+                         station_ids: dict[str, str], type_ids: dict[str, str],
+                         line_ids: dict[str, str]) -> None:
+    """Keeps today's and tomorrow's full timetable upserted, in KST."""
+    now = config.now()
+    for offset in (0, 86400):
+        day = config.kst(now + offset)
+        tag = day.strftime("%Y-%m-%d")
+        if tag in built_days:
+            continue
+        await build_schedule(conn, day, station_ids, type_ids, line_ids)
+        built_days.add(tag)
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, stream=sys.stdout,
                         format="%(asctime)s %(name)-11s %(message)s", datefmt="%H:%M:%S")
     pool = await asyncpg.create_pool(config.DATABASE_URL, min_size=1, max_size=3)
+    built_days: set[str] = set()
     async with pool.acquire() as conn:
         await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")  # gen_random_uuid()
         await conn.execute(SCHEMA)
@@ -249,7 +295,8 @@ async def main() -> None:
             await conn.execute(EMBED_SCHEMA)
         except Exception:
             log.warning("pgvector unavailable -- graph will have no embeddings")
-        await build_static(conn)
+        station_ids, type_ids, line_ids = await build_static(conn)
+        await _sync_schedule(conn, built_days, station_ids, type_ids, line_ids)
 
     if not config.GEMINI_API_KEY:
         log.warning("GEMINI_API_KEY not set -- nodes will not be embedded")
@@ -261,6 +308,7 @@ async def main() -> None:
             async with pool.acquire() as conn:
                 try:
                     await sync.run_once(conn)
+                    await _sync_schedule(conn, built_days, station_ids, type_ids, line_ids)
                     await embed_pending(conn)
                 except Exception:
                     log.exception("sync pass failed")
