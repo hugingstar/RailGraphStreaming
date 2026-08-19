@@ -8,7 +8,7 @@ const API = 'http://127.0.0.1:8123'
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: 5273,
+    port: Number(process.env.PORT) || 5273,
     proxy: {
       '/api': { target: API, changeOrigin: true },
       '/ws': { target: API.replace('http', 'ws'), ws: true },

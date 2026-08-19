@@ -156,14 +156,20 @@ export default function Sidebar(p: Props) {
             지도
           </label>
         </div>
-        <div className="filter-row">
+        <div className="lang-row">
           <span className="filter-label">지도 글자</span>
-          <div className="seg seg-inline" role="group" aria-label="지도 글자 언어">
+          <div className="lang-grid" role="group" aria-label="지도 글자 언어">
             <button className={p.lang === 'ko' ? 'on' : ''} onClick={() => p.onLang('ko')}>
               한글
             </button>
             <button className={p.lang === 'en' ? 'on' : ''} onClick={() => p.onLang('en')}>
               English
+            </button>
+            <button className={p.lang === 'ja' ? 'on' : ''} onClick={() => p.onLang('ja')}>
+              日本語
+            </button>
+            <button className={p.lang === 'zh' ? 'on' : ''} onClick={() => p.onLang('zh')}>
+              中文
             </button>
           </div>
         </div>

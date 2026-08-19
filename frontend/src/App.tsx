@@ -178,22 +178,30 @@ export default function App() {
 }
 
 function Legend({ network }: { network: NetworkPayload | null }) {
+  const [open, setOpen] = useState(false)
   if (!network) return null
   return (
-    <div className="legend">
-      <div className="legend-title">노선</div>
-      <ul>
-        {network.lines.map((l) => (
-          <li key={l.id}>
-            <i style={{ background: l.color, height: l.hsr ? 3 : 2 }} />
-            {l.name}
-          </li>
-        ))}
-      </ul>
-      <p className="legend-note">
-        열차마다 번지는 빛은 <strong>위치 확률밀도</strong>입니다. 밝을수록 그 지점에 있을
-        확률이 높고, 관측이 오래될수록 넓게 퍼집니다.
-      </p>
+    <div className={`legend ${open ? 'open' : ''}`}>
+      <button type="button" className="legend-title" onClick={() => setOpen((v) => !v)}>
+        노선
+        <i className={`legend-caret ${open ? 'open' : ''}`} />
+      </button>
+      {open && (
+        <>
+          <ul>
+            {network.lines.map((l) => (
+              <li key={l.id}>
+                <i style={{ background: l.color, height: l.hsr ? 3 : 2 }} />
+                {l.name}
+              </li>
+            ))}
+          </ul>
+          <p className="legend-note">
+            열차마다 번지는 빛은 <strong>위치 확률밀도</strong>입니다. 밝을수록 그 지점에 있을
+            확률이 높고, 관측이 오래될수록 넓게 퍼집니다.
+          </p>
+        </>
+      )}
     </div>
   )
 }

@@ -17,18 +17,39 @@ interface Props {
   onSelect: (id: string | null) => void
 }
 
-// Stations worth naming at national zoom, with the romanised name Korail uses
-// on its own signage.  The basemap tiles carry no text of their own (see
+// Stations worth naming at national zoom, with the name in each supported
+// language.  The basemap tiles carry no text of their own (see
 // BASEMAP_VARIANT), so this table is the only place map labels come from --
 // which is what lets the language switch and the font size actually work.
-const MAJOR_STATIONS: Record<string, string> = {
-  '서울': 'Seoul', '수서': 'Suseo', '청량리': 'Cheongnyangni', '광명': 'Gwangmyeong',
-  '천안아산': 'Cheonan-Asan', '오송': 'Osong', '대전': 'Daejeon', '동대구': 'Dongdaegu',
-  '부산': 'Busan', '광주송정': 'Gwangju-Songjeong', '목포': 'Mokpo', '익산': 'Iksan',
-  '전주': 'Jeonju', '여수엑스포': 'Yeosu-EXPO', '순천': 'Suncheon', '진주': 'Jinju',
-  '창원': 'Changwon', '포항': 'Pohang', '울산': 'Ulsan', '강릉': 'Gangneung',
-  '춘천': 'Chuncheon', '안동': 'Andong', '제천': 'Jecheon', '원주': 'Wonju',
-  '만종': 'Manjong', '경주': 'Gyeongju', '태화강': 'Taehwagang', '군산': 'Gunsan',
+const MAJOR_STATIONS: Record<string, { en: string; ja: string; zh: string }> = {
+  '서울': { en: 'Seoul', ja: 'ソウル', zh: '首尔' },
+  '수서': { en: 'Suseo', ja: 'スソ', zh: '水西' },
+  '청량리': { en: 'Cheongnyangni', ja: 'チョンニャンニ', zh: '清凉里' },
+  '광명': { en: 'Gwangmyeong', ja: 'クァンミョン', zh: '光明' },
+  '천안아산': { en: 'Cheonan-Asan', ja: 'チョナン・アサン', zh: '天安牙山' },
+  '오송': { en: 'Osong', ja: 'オソン', zh: '五松' },
+  '대전': { en: 'Daejeon', ja: 'テジョン', zh: '大田' },
+  '동대구': { en: 'Dongdaegu', ja: 'トンデグ', zh: '东大邱' },
+  '부산': { en: 'Busan', ja: 'プサン', zh: '釜山' },
+  '광주송정': { en: 'Gwangju-Songjeong', ja: 'クァンジュ・ソンジョン', zh: '光州松汀' },
+  '목포': { en: 'Mokpo', ja: 'モクポ', zh: '木浦' },
+  '익산': { en: 'Iksan', ja: 'イクサン', zh: '益山' },
+  '전주': { en: 'Jeonju', ja: 'チョンジュ', zh: '全州' },
+  '여수엑스포': { en: 'Yeosu-EXPO', ja: 'ヨス・エキスポ', zh: '丽水世博会' },
+  '순천': { en: 'Suncheon', ja: 'スンチョン', zh: '顺天' },
+  '진주': { en: 'Jinju', ja: 'チンジュ', zh: '晋州' },
+  '창원': { en: 'Changwon', ja: 'チャンウォン', zh: '昌原' },
+  '포항': { en: 'Pohang', ja: 'ポハン', zh: '浦项' },
+  '울산': { en: 'Ulsan', ja: 'ウルサン', zh: '蔚山' },
+  '강릉': { en: 'Gangneung', ja: 'カンヌン', zh: '江陵' },
+  '춘천': { en: 'Chuncheon', ja: 'チュンチョン', zh: '春川' },
+  '안동': { en: 'Andong', ja: 'アンドン', zh: '安东' },
+  '제천': { en: 'Jecheon', ja: 'チェチョン', zh: '堤川' },
+  '원주': { en: 'Wonju', ja: 'ウォンジュ', zh: '原州' },
+  '만종': { en: 'Manjong', ja: 'マンジョン', zh: '万钟' },
+  '경주': { en: 'Gyeongju', ja: 'キョンジュ', zh: '庆州' },
+  '태화강': { en: 'Taehwagang', ja: 'テファガン', zh: '太和江' },
+  '군산': { en: 'Gunsan', ja: 'クンサン', zh: '群山' },
 }
 
 const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] }
@@ -340,7 +361,7 @@ export default function MapView(props: Props) {
         .map((s) => {
           const el = document.createElement('div')
           el.className = 'rg-station-label'
-          el.textContent = lang === 'en' ? MAJOR_STATIONS[s.name] : s.name
+          el.textContent = lang === 'ko' ? s.name : MAJOR_STATIONS[s.name][lang]
           return new maplibregl.Marker({ element: el, anchor: 'left', offset: [9, 0] })
             .setLngLat([s.lon, s.lat])
             .addTo(m)

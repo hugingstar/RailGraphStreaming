@@ -4,7 +4,7 @@ export type TrainStatus = 'SCHEDULED' | 'RUNNING' | 'DWELL' | 'ARRIVED'
 export type Direction = 'up' | 'down'
 
 /** Language of the place names drawn on the map. */
-export type Lang = 'ko' | 'en'
+export type Lang = 'ko' | 'en' | 'ja' | 'zh'
 
 export interface Quantiles {
   p05: number
