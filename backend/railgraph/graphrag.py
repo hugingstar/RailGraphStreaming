@@ -69,42 +69,83 @@ def _hhmm(ts: float | None) -> str:
     return datetime.fromtimestamp(ts, config.KST).strftime("%H:%M")
 
 
+RUSH_WINDOW_S = 1800  # 30 min: departing sooner than this isn't a realistic recommendation
+
+
 async def _station_trips(conn: asyncpg.Connection, station_id: str, station_key: str,
                          day_start: float | None, day_end: float | None,
-                         limit: int = 15) -> list[dict]:
+                         limit: int = 15) -> tuple[list[dict], dict]:
     """Graph traversal (not vector search): every Trip whose route touches
-    this station, optionally windowed to one KST calendar day, trains still
-    ahead of *now* first (soonest first), already-departed ones after --
-    so "다음 열차가 뭐야" reads naturally instead of starting at 05:00."""
+    this station, optionally windowed to one KST calendar day.
+
+    Split into two buckets instead of one flat list: `recommended` trains are
+    at least RUSH_WINDOW_S out (soonest first) -- the only ones worth putting
+    in front of someone -- and `too_soon` ones depart within that window, kept
+    only so the reply can call them out as too rushed to catch rather than
+    silently dropping them."""
     clauses = ["e.dst_id = $1", "e.relation IN ('DEPARTS_FROM', 'STOPS_AT', 'ARRIVES_AT')"]
-    params: list = [station_id]
+    base_params: list = [station_id]
     if day_start is not None:
         clauses.append("(e.properties->>'departure_ts')::float BETWEEN $2 AND $3")
-        params.extend([day_start, day_end])
-    params.append(config.now())
-    now_param = f"${len(params)}"
-    rows = await conn.fetch(
-        f"""
-        SELECT n.type, n.key, n.label, n.summary, e.properties AS stop
-        FROM graph_edges e JOIN graph_nodes n ON n.id = e.src_id
-        WHERE {" AND ".join(clauses)}
-        ORDER BY (e.properties->>'departure_ts')::float < {now_param},
-                 (e.properties->>'departure_ts')::float
-        LIMIT {limit}
-        """,
-        *params,
+        base_params.extend([day_start, day_end])
+    where = " AND ".join(clauses)
+    now_ts = config.now()
+    rush_cutoff = now_ts + RUSH_WINDOW_S
+
+    async def _fetch(extra_clause: str, extra_params: list, fetch_limit: int) -> list[dict]:
+        params = base_params + extra_params
+        rows = await conn.fetch(
+            f"""
+            SELECT n.type, n.key, n.label, n.summary, n.properties AS trip_props,
+                   e.properties AS stop
+            FROM graph_edges e JOIN graph_nodes n ON n.id = e.src_id
+            WHERE {where} {extra_clause}
+            ORDER BY (e.properties->>'departure_ts')::float
+            LIMIT {fetch_limit}
+            """,
+            *params,
+        )
+        out = []
+        for r in rows:
+            stop = json.loads(r["stop"]) if isinstance(r["stop"], str) else r["stop"]
+            trip_props = json.loads(r["trip_props"]) if isinstance(r["trip_props"], str) else r["trip_props"]
+            dep_ts = stop.get("departure_ts") if stop.get("departure_ts") is not None else stop.get("arrival_ts")
+            out.append({
+                "type": r["type"], "key": r["key"], "label": r["label"], "summary": r["summary"],
+                "time": _hhmm(dep_ts), "name": trip_props.get("type", "?"),
+                "number": trip_props.get("number", "?"),
+            })
+        return out
+
+    recommended = await _fetch(
+        f"AND (e.properties->>'departure_ts')::float >= ${len(base_params) + 1}",
+        [rush_cutoff], limit,
     )
-    results = []
-    for r in rows:
-        stop = json.loads(r["stop"]) if isinstance(r["stop"], str) else r["stop"]
-        when = _hhmm(stop.get("departure_ts") if stop.get("departure_ts") is not None
-                     else stop.get("arrival_ts"))
-        results.append({
-            "type": r["type"], "key": r["key"], "label": r["label"],
-            "summary": f"{station_key} {when} 경유 — {r['summary']}",
-            "score": None, "neighbors": [],
-        })
-    return results
+    too_soon = await _fetch(
+        f"AND (e.properties->>'departure_ts')::float >= ${len(base_params) + 1} "
+        f"AND (e.properties->>'departure_ts')::float < ${len(base_params) + 2}",
+        [now_ts, rush_cutoff], 3,
+    )
+
+    nodes = [
+        {"type": r["type"], "key": r["key"], "label": r["label"],
+         "summary": f"{station_key} {r['time']} 경유 — {r['summary']}",
+         "score": None, "neighbors": []}
+        for r in recommended
+    ] + [
+        {"type": r["type"], "key": r["key"], "label": r["label"],
+         "summary": f"{station_key} {r['time']} 경유 — {r['summary']} [30분 이내 출발이라 촉박함]",
+         "score": None, "neighbors": []}
+        for r in too_soon
+    ]
+    return nodes, {"recommended": recommended, "too_soon": too_soon}
+
+
+def _schedule_table(rows: list[dict]) -> str:
+    lines = ["출발시각 | 기차이름 | 일련번호", "-------- | -------- | --------"]
+    for r in rows[:8]:
+        lines.append(f"{r['time']} | {r['name']} | {r['number']}")
+    return "\n".join(lines)
 
 
 async def _neighbors(conn: asyncpg.Connection, node_id: str) -> list[dict]:
@@ -125,15 +166,18 @@ async def _neighbors(conn: asyncpg.Connection, node_id: str) -> list[dict]:
 
 
 async def retrieve(pool: asyncpg.Pool, question: str, top_k: int = TOP_K,
-                   history: list[dict] | None = None) -> list[dict]:
+                   history: list[dict] | None = None) -> tuple[list[dict], dict | None]:
     search_text = _context_text(question, history)
+    schedule: dict | None = None
     async with pool.acquire() as conn:
         results: list[dict] = []
         station = await _match_station(conn, search_text)
         if station is not None:
             station_id, station_key = station
             day_start, day_end = _day_window(search_text)
-            results.extend(await _station_trips(conn, station_id, station_key, day_start, day_end))
+            station_nodes, schedule = await _station_trips(conn, station_id, station_key,
+                                                           day_start, day_end)
+            results.extend(station_nodes)
 
         # Exact-match graph traversal above needs no embedding call; vector
         # search is best-effort on top of it, so a missing/quota-exhausted
@@ -165,7 +209,7 @@ async def retrieve(pool: asyncpg.Pool, question: str, top_k: int = TOP_K,
                     "summary": r["summary"], "score": round(r["score"], 4),
                     "neighbors": neighbors,
                 })
-    return results
+    return results, schedule
 
 
 def _format_context(nodes: list[dict]) -> str:
@@ -178,36 +222,56 @@ def _format_context(nodes: list[dict]) -> str:
     return "\n".join(lines)
 
 
+GREETING = "구구~ 비둘기 역장입니다! 🕊️"
+
+
 async def answer(pool: asyncpg.Pool, question: str, generate: bool = True,
                  history: list[dict] | None = None) -> dict:
-    nodes = await retrieve(pool, question, history=history)
+    nodes, schedule = await retrieve(pool, question, history=history)
     result: dict = {"question": question, "nodes": nodes, "answer": None}
     if not nodes:
-        result["answer"] = "관련 정보를 찾지 못했습니다."
+        result["answer"] = f"{GREETING}\n\n관련 정보를 찾지 못했습니다."
         return result
     if not generate:
         return result
     context = _format_context(nodes)
     now_str = datetime.now(config.KST).strftime("%H:%M")
+    table = _schedule_table(schedule["recommended"]) if schedule and schedule["recommended"] else None
+
+    # The greeting and the schedule table (when there is one) are built
+    # deterministically in Python -- asking the model to reproduce a table
+    # from prose facts is exactly the kind of formatting it drifts on, so it
+    # only ever has to write the short commentary underneath.
+    if table:
+        shape_instructions = (
+            "사용자에게는 이미 '출발시각 | 기차이름 | 일련번호' 표가 보여진 상태다. 표를 다시 "
+            "나열하지 말고, 표에 대한 짧은 코멘트만 써라.\n"
+            f"지금으로부터 {RUSH_WINDOW_S // 60}분 이내에 출발하는 열차는 타기 너무 촉박해서 "
+            "표에서 뺐다. [사실] 중 '[30분 이내 출발이라 촉박함]' 표시가 붙은 열차가 있으면 그건 "
+            "지금 타기엔 너무 촉박하다고 한 문장으로 짧게 언급하라 (없으면 언급하지 마라).\n"
+        )
+    else:
+        shape_instructions = "[사실]에서 언급하는 열차명과 시각은 반드시 문장에 포함하라.\n"
     prompt = (
         "너는 철도 운행 그래프에서 검색한 사실을 바탕으로 답하는 역무원 챗봇 '비둘기 역장님'이다. "
-        "다음 지침을 지켜라.\n"
-        "1. [사실]에 있는 내용만 근거로 답하고, 근거가 부족하면 모른다고 답하라.\n"
-        f"2. 지금 시각은 {now_str}이다. [사실]은 이미 지금 시각을 기준으로 아직 남은(다가오는) 열차부터 "
-        "정렬되어 있으니, 그 순서를 따라 가장 가까운 시간에 출발/경유하는 열차부터 먼저 언급하라.\n"
-        "3. [사실]의 열차가 8건을 넘으면 전부 나열하지 말고, 가장 가까운 시간 순으로 3~4건만 짚어준 뒤 "
-        "상행/하행, 출발 시간대처럼 사용자가 좁혀서 다시 물어볼 수 있는 구체적인 질문을 "
-        "한국어로 짧게 덧붙여라.\n"
-        "4. 목록을 그대로 나열하지 말고, 자연스러운 문장 2~4개로 정리하되 열차명과 시각은 "
-        "반드시 포함하라.\n"
-        "5. 첫 줄은 반드시 '구구~ 비둘기 역장입니다! ' 뒤에 어울리는 이모티콘 하나를 붙이고, "
-        "그다음 빈 줄을 하나 띄운 뒤 본문을 이어서 써라. 본문 중간에도 상황에 맞는 이모티콘을 "
-        "1~2개 자연스럽게 섞어라 (예: 🚄 🚉 ⏰ 🕊️). 이모티콘을 과하게 남발하지는 마라.\n"
-        "6. [이전 대화]가 있으면 그 맥락을 이어서 답하라 (예: '상행이요' 같은 짧은 후속 질문).\n\n"
+        "인사말은 이미 별도로 표시되어 있으니 너는 본문만 작성한다 ('구구~...' 같은 인사말을 "
+        "다시 쓰지 마라).\n"
+        f"지금 시각은 {now_str}이다.\n"
+        + shape_instructions +
+        "[사실]에 있는 내용만 근거로 답하고, 근거가 부족하면 모른다고 답하라. 열차가 8건을 넘으면 "
+        "전부 나열하지 말고, 상행/하행, 출발 시간대처럼 사용자가 좁혀서 다시 물어볼 수 있는 구체적인 "
+        "질문을 한국어로 짧게 덧붙여라. 문장 1~3개로 간결하게 쓰고, 본문 중간에 상황에 맞는 "
+        "이모티콘을 1~2개 자연스럽게 섞어라 (예: 🚄 🚉 ⏰). 과하게 남발하지는 마라. "
+        "[이전 대화]가 있으면 그 맥락을 이어서 답하라 (예: '상행이요' 같은 짧은 후속 질문).\n\n"
         f"[이전 대화]\n{_history_text(history)}\n\n[사실]\n{context}\n\n[질문]\n{question}"
     )
     try:
-        result["answer"] = (await embed.generate_text(prompt)).strip()
+        commentary = (await embed.generate_text(prompt)).strip()
+        parts = [GREETING]
+        if table:
+            parts.append(table)
+        parts.append(commentary)
+        result["answer"] = "\n\n".join(parts)
     except Exception as exc:  # noqa: BLE001 - degrade to retrieval-only
         result["answer"] = None
         result["generation_error"] = str(exc)

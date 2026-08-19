@@ -24,11 +24,18 @@ interface Message {
   nodes: RagNode[]
   error: string | null
   loading: boolean
+  answeredAt: number | null
 }
 
 const EXAMPLES = ['대전역은 어떤 노선이 지나가?', '부산행 KTX 중 지연된 열차는?']
 
 let nextId = 0
+
+const fmtClock = (ts: number) => {
+  const d = new Date(ts)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
 
 /** Floating GraphRAG query bar: docked to the bottom of the map, collapsed to
  * a single input pill until the first question is asked. Keeps only the
@@ -58,20 +65,30 @@ export default function RagChat() {
       .filter((m) => m.answer && !m.error)
       .slice(-6)
       .map((m) => ({ question: m.question, answer: m.answer as string }))
-    setMessages((prev) => [...prev, { id, question: q, answer: null, nodes: [], error: null, loading: true }])
+    setMessages((prev) => [
+      ...prev,
+      { id, question: q, answer: null, nodes: [], error: null, loading: true, answeredAt: null },
+    ])
     try {
       const res = await call<RagResponse>('/api/graphrag/query', {
         method: 'POST',
         body: JSON.stringify({ query: q, generate: true, history }),
       })
       setMessages((prev) =>
-        prev.map((m) => (m.id === id ? { ...m, loading: false, answer: res.answer, nodes: res.nodes } : m)),
+        prev.map((m) =>
+          m.id === id
+            ? { ...m, loading: false, answer: res.answer, nodes: res.nodes, answeredAt: Date.now() }
+            : m,
+        ),
       )
     } catch (err) {
       setMessages((prev) =>
         prev.map((m) =>
           m.id === id
-            ? { ...m, loading: false, error: err instanceof Error ? err.message : '질의에 실패했습니다' }
+            ? {
+                ...m, loading: false, answeredAt: Date.now(),
+                error: err instanceof Error ? err.message : '질의에 실패했습니다',
+              }
             : m,
         ),
       )
@@ -122,6 +139,7 @@ export default function RagChat() {
                   {!m.loading && !m.error && (
                     <>
                       <p>{m.answer ?? '관련 정보를 찾지 못했어요.'}</p>
+                      {m.answeredAt != null && <time className="rag-msg-time">{fmtClock(m.answeredAt)}</time>}
                       {m.nodes.length > 0 && (
                         <div className="rag-sources">
                           <button type="button" className="rag-sources-toggle" onClick={() => toggleSources(m.id)}>
