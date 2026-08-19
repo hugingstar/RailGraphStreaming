@@ -239,15 +239,23 @@ async def get_train(train_id: str, _user=Depends(auth.require_user)):
     return {"position": est, "plan": plan}
 
 
+class GraphRagTurn(BaseModel):
+    question: str = Field(min_length=1, max_length=500)
+    answer: str = Field(default="", max_length=2000)
+
+
 class GraphRagQuery(BaseModel):
     query: str = Field(min_length=1, max_length=500)
     generate: bool = True
+    history: list[GraphRagTurn] = Field(default_factory=list, max_length=8)
 
 
 @app.post("/api/graphrag/query")
 async def graphrag_query(body: GraphRagQuery, _user=Depends(auth.require_user)):
+    history = [h.model_dump() for h in body.history]
     try:
-        return await graphrag.answer(auth.get_pool(), body.query, generate=body.generate)
+        return await graphrag.answer(auth.get_pool(), body.query, generate=body.generate,
+                                     history=history)
     except RuntimeError as exc:  # GEMINI_API_KEY missing
         raise HTTPException(status_code=503, detail=str(exc))
 

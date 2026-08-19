@@ -52,11 +52,17 @@ export default function RagChat() {
     setInput('')
     setOpen(true)
     const id = nextId++
+    // Last few answered turns, so a short follow-up ("상행이요") can be
+    // resolved against the station/date mentioned earlier in the chat.
+    const history = messages
+      .filter((m) => m.answer && !m.error)
+      .slice(-6)
+      .map((m) => ({ question: m.question, answer: m.answer as string }))
     setMessages((prev) => [...prev, { id, question: q, answer: null, nodes: [], error: null, loading: true }])
     try {
       const res = await call<RagResponse>('/api/graphrag/query', {
         method: 'POST',
-        body: JSON.stringify({ query: q, generate: true }),
+        body: JSON.stringify({ query: q, generate: true, history }),
       })
       setMessages((prev) =>
         prev.map((m) => (m.id === id ? { ...m, loading: false, answer: res.answer, nodes: res.nodes } : m)),
