@@ -1,0 +1,19 @@
+# python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# node
+node_modules/
+frontend/dist/
+
+# runtime
+.logs/
+.logdir
+
+# secrets
+.env
+
+# build artifacts
+frontend/tsconfig.tsbuildinfo

@@ -1,0 +1,12 @@
+{
+  "name": "railgraph-tools",
+  "private": true,
+  "description": "Dev tooling for RailGraph: headless screenshots of the running UI.",
+  "type": "module",
+  "scripts": {
+    "shot": "node scripts/shoot.mjs"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^25.8.0"
+  }
+}
